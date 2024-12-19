@@ -1,0 +1,531 @@
+---
+title: "Homework"
+author: "侯志琨"
+date: "2024-12-13"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+载入所依赖的工具包
+
+```{r}
+
+# 如未安装，可使用install.packages("xxx")逐个安装以下工具包
+library(car)
+library(multcomp)
+library(vartest)
+library(data.table)
+library(bruceR)
+library(ez)
+library(afex)
+library(emmeans)
+```
+
+# 两因素完全随机设计
+
+## 数据录入
+
+根据舒华《心理与教育研究中的多因素实验设计(第2版)》p.56表格，逐列录入数据如下
+
+【注意】如果不将向量转化为factor，则aov将会使用错误的自由度进行计算
+
+```{r}
+
+tbl = data.frame(value=c(3,6,4,3,4,6,4,2,5,7,5,2,4,5,3,3,8,9,8,7,12,13,12,11));
+A = c(rep(1,12),rep(2,12));
+B = c(rep(1,4),rep(2,4),rep(3,4),rep(1,4),rep(2,4),rep(3,4));
+tbl$group = factor((A-1)*3+B);
+tbl$A = factor(A);
+tbl$B = factor(B);
+tbl$S = factor(seq(1,24))
+```
+
+## 数据检验
+
+### 正态性检验
+
+【注意】关于正态性检验，不同的教材/软件有不同的说法。有些是对所有样本进行正态性检验，有些是对分组后的样本进行正态性检验（本文档采用此种），有些则是对模型拟合后的残差进行正态性检验。似乎是这样的：如果是对同一总体做方差分析，就应该直接对所有样本做正态检验（如学生）；如果对不同总体做方差分析，就应该分组后检验（如健康人和病人）；如果是用线性模型的视角来理解方差分析，就应该用残差来检验。
+
+【方法1】使用q-q图查看
+
+```{r}
+
+qqPlot(tbl$value,tbl$group,distribution="norm",envelope=list(level=0.95))
+```
+
+【方法2】使用Shapiro-Wilk检验
+
+【注意】在Rmarkdown中使用for循环将不会显示输出结果，因此这里使用split和lapply辅助
+
+```{r}
+
+groups = split(tbl$value, tbl$group)
+lapply(groups, shapiro.test)
+```
+
+### 方差齐性检验
+
+【方法1】使用Levene检验
+
+【注意】方差齐性检验是在2\*3=6个组之间进行比较，因此参数设定为A\*B
+
+【此外】R语言中的leveneTest函数默认使用center='median'，有些统计软件则默认使用'mean'
+
+```{r}
+leveneTest(value~A*B,data=tbl,center='mean')
+```
+
+【方法2】Bartlett检验（对正态敏感，由于已通过正态性检验，可以使用）
+
+```{r}
+bartlett.test(tbl$value,tbl$group)
+```
+
+【方法3】使用vartest工具包中的Hartley检验（只适用于每组样本数相同的情况，本例中可以使用）
+
+```{r}
+hartley.test(value~group,data=tbl)
+```
+
+## 方差分析
+
+### 主效应
+
+【方法1】直接使用R语言自带stats包中的aov函数计算
+
+```{r}
+
+anova_stats = aov(value~A*B,data=tbl)
+summary(anova_stats)
+
+```
+
+【方法2】使用bruceR工具包中的MANOVA计算
+
+```{r}
+
+anova_bruceR = MANOVA(tbl,dv="value",between=c("A","B"))
+
+```
+
+【方法3】使用ez工具包中的ezANOVA函数
+
+```{r}
+ezANOVA(tbl,dv=.(value),between=.(A,B),wid=.(S))
+
+```
+
+【方法4】使用afex工具包中的aov_ez计算
+
+```{r}
+anova_afex = aov_ez(id="S",dv="value",between=c("A","B"),data=tbl)
+summary(anova_afex)
+```
+
+### 交互效应
+
+【图1】在B=1条件下，A因素对Y的影响不显著；在B=2/3条件下，A因素对Y影响显著
+
+【图2】在A=1条件下，B因素对Y的影响不显著；在A=2条件下，B因素对Y影响显著
+
+```{r}
+
+with(tbl,interaction.plot(A,B,value))
+with(tbl,interaction.plot(B,A,value))
+```
+
+### 简单效应
+
+【注意】**简单效应不是选择数据的子集后直接运行单因素方差分析**。在计算组间时，是对数据的子集使用类似单因素的方式得到MS；但计算F值时，**分母不是组内MS，而是用双因素anova中得到的残差！**在matlab版的代码里演示了手动计算
+
+【方法1】对于statas中aov输出的结果，可以使用emmeans包中的emmeans计算简单效应
+
+```{r}
+
+controlA = emmeans(anova_stats,~B|A);
+controlB = emmeans(anova_stats,~A|B);
+
+test(contrast(controlA), joint=TRUE)
+print("=========================================")
+test(contrast(controlB), joint=TRUE)
+
+```
+
+同样，afex工具包中aov_ez函数的输出也可以用此方法计算简单效应
+
+```{r}
+controlA = emmeans(anova_afex,~B|A);
+controlB = emmeans(anova_afex,~A|B);
+
+test(contrast(controlA), joint=TRUE)
+print("=========================================")
+test(contrast(controlB), joint=TRUE)
+```
+
+【方法2】对于bruceR中MANOVA输出的结果，可以使用bruceR包中的EMMEANS计算简单效应
+
+```{r}
+
+controlA = EMMEANS(anova_bruceR, effect="B",by="A")
+
+controlB = EMMEANS(anova_bruceR, effect="A",by="B")
+```
+
+以上结果验证了上一节中通过目视观测交互效应图得到的推论：在A=1时B效应不显著，B=1时A效应不显著，其它情况下简单效应显著
+
+### 事后多重比较
+
+使用TukeyHSD进行事后检验，发现在B=1的条件下(2:1-1:1)和A=1的条件下(1:2-1:1、1:3-1:1、1:3-1:2)确实有P\>0.05
+
+```{r}
+TukeyHSD(anova_stats);
+```
+
+# 两因素重复测量设计
+
+## 数据录入
+
+根据舒华《心理与教育研究中的多因素实验设计(第2版)》p.73/74表格，逐列录入数据如下
+
+【注】完全随机设计是5,7,5,2而这里是5,6,5,2，可能存在印刷错误
+
+```{r}
+
+tbl = data.frame(value=c(3,6,4,3,4,6,4,2,5,7,5,2,4,5,3,3,8,9,8,7,12,13,12,11));
+A = c(rep(1,12),rep(2,12));
+B = c(rep(1,4),rep(2,4),rep(3,4),rep(1,4),rep(2,4),rep(3,4));
+tbl$A = factor(A);
+tbl$B = factor(B);
+tbl$S = factor(rep(c(1,2,3,4),6))
+tbl$group = factor((A-1)*3+B)
+
+subjects = split(tbl$value,tbl$S);
+frame = data.frame(subjects);
+frame = transpose(frame)
+colnames(frame) = c("A1B1","A1B2","A1B3","A2B1","A2B2","A2B3")
+```
+
+## 数据检验
+
+### 正态性检验
+
+【注意】在被试内设计中，由于所有处理都是被试内因素，因此需要将每个被试**采用相同处理措施**得到的测量结果分为一组，然后**对每一组**都进行正态性检验
+
+```{r}
+
+groups = split(tbl$value, tbl$group)
+lapply(groups, shapiro.test)
+
+qqPlot(tbl$value,tbl$group,distribution="norm",envelope=list(level=0.95))
+```
+
+### 方差齐性检验
+
+【注意】在两因素的被试内设计中，不要求方差齐性检验。因为同质性假设已经被隐含在了球形假设当中。
+
+### 球形度检验
+
+【为什么需要球形假设】重复测量方差分析中，需要进行球形检验。这是因为：**被试内设计假定同一个被试的多次测量之间不会相互影响**。乍看之下，该假定需要重复测量的结果之间协方差为零。但是请注意：由于是被试内设计，多次测量**可以受到共同因素**的影响。也就是说，允许协变量作为**共因**而导致因变量之间的相关。因此，只需要**协方差齐**即可。此时，再结合方差分析本就有的同质性假设(方差齐)，就得到了球形假设(协方差矩阵的对角线齐，其它元素之间齐)。
+
+【为什么叫球形假设】那么，为什么要叫球形假设呢？协方差矩阵必为实对称矩阵，因此一定能够相似对角化，但其对应的变换既有可能是球形也有可能是椭球形。如果对应球形变换，需要所有特征值均近似为同一个值。首先我们忽略误差，将协方差矩阵假定为一个对角线全为a、其余元素全为b的n\*n矩阵。我们可以根据求特征值的方法写出其行列式，然后套用两三角矩阵的通用方法得出行列式的结果并得到公式：
+
+$$
+(\lambda-a+b)^{n-1}\frac{b(n-1)}{a-\lambda}=0
+$$
+
+当$b=0$时，协方差矩阵是只有对角线的矩阵，显然对应于球形变换。
+
+当$b \neq 0$，由于$\lambda$有唯一解，因此矩阵具有n重相等特征值，因此也对应于球形变换。
+
+【球形检验的原理】在[matlab文档](https://www.mathworks.com/help/stats/mauchlys-test-of-sphericity.html)中找到了Mauchly球形检验中**统计量W**的公式：
+
+$$
+W=\frac{|T|}{(trace(T)/p)^d}
+$$
+
+其中，$p$表示变量数，而$d=p-1$，此外还有：
+
+$$
+T = M' \Sigma M
+$$
+
+其中，$M$表示orthogonal contrast matrix。综上，我们可以简单理解：由于矩阵的迹等于特征值之和，因此分母可以看作假定方差齐，从而直接用除法计算特征值，再用$d$次方求此时的体积变化。而分子则是直接用数据的协方差矩阵作为空间变换套上去，然后用行列式来求实际的体积变化。当实际的体积变化与理论的体积变化接近1:1时，就表示协方差矩阵近似于球形。此时只需要检验W统计量是否显著偏离于1，就可以完成球形度检验了。
+
+【注意】在本例中，A\*B是2\*3设计，由于两个水平时只有方差没有协方差，所以在SPSS中A因素对应行的自由度会显示为0，而在JASP中则直接省略了A因素对应的行
+
+【注意】在本例中，需要对A因素、B因素、A\*B分别进行球形假设验证，因为我们需要保证所有的因素都不存在重复测量时前后之间的相互影响。
+
+【注意】**由于R语言自带的stats包中的球形度检验非常难用，建议直接用bruceR或ezANOVA**
+
+【校正】本例中，数据没有通过球形检验。一种解决方法是改用多元方差分析manova（无需球形假设），另一种方法则是使用Greenhouse-Geisser和Huyn-Feldt得到的epsilon对自由度进行校正。其中，当epsilon偏离1越远，说明球形度的估计值越低。Griden推荐的解决方案为：epsilon\>0.75时，使用Huyn-Feld校正；当epsilon\<0.75时，则使用Greenhouse-Geisser校正。
+
+## 方差分析
+
+### 主效应
+
+【方法1】直接使用aov函数
+
+【注意】本例中，被试内因素为A和B，因此需要在模型中声明误差项Error(S/(A\*B))
+
+```{r}
+
+anova_stats = aov(value ~ A*B+Error(S/(A*B)),data=tbl);
+summary(anova_stats)
+
+```
+
+【方法2】使用BruceR工具包中的MANOVA函数
+
+【注意】dv是用于被试间设计的，因此这里要用dvs；此外，MANOVA在进行被试间和混合设计时必须使用wide-format而不能使用long-format。前者指frame中的结果，后者指tbl中的结果
+
+```{r}
+
+anova_bruceR = MANOVA(frame,dvs="A1B1:A2B3",dvs.pattern="A(.)B(.)",within=c("A","B"))
+```
+
+【方法3】使用ez工具包中的ezANOVA函数
+
+```{r}
+
+ezANOVA(tbl,dv=.(value),within=.(A,B),wid=.(S))
+
+```
+
+【方法4】使用afex工具包中的aov_ez函数
+
+```{r}
+
+anova_afex = aov_ez(id="S",dv="value",within=c("A","B"),data=tbl)
+summary(anova_afex)
+```
+
+### 交互效应
+
+交互效应，在A不等于1或B不等于1时显著
+
+```{r}
+with(tbl,interaction.plot(A,B,value))
+with(tbl,interaction.plot(B,A,value))
+```
+
+### 简单效应
+
+【注意】在分析双因素被试内设计的简单效应时，要进行**单因素重复测量方差分析**而不是普通的单因素方差分析。具体的计算过程可见matlab版代码。
+
+【方法1】基于aov的计算结果，使用emmeans来看简单效应；**输出的结果是错误的！**
+
+```{r}
+
+controlA = emmeans(anova_stats,~A+B);
+controlB = emmeans(anova_stats,~B);
+
+test(contrast(controlA,adjust=NULL), joint=TRUE)
+print("=========================================")
+test(contrast(controlB,adjust=NULL), joint=TRUE)
+```
+
+然而，在对anova_afex的结果进行计算时，输出的结果是正确的
+
+```{r}
+
+controlA = emmeans(anova_afex,~B|A);
+controlB = emmeans(anova_afex,~A|B);
+
+test(contrast(controlA), joint=TRUE)
+print("=========================================")
+test(contrast(controlB), joint=TRUE)
+```
+
+【方法2】基于MANOVA的计算结果，使用EMMEANS来看简单效应
+
+```{r}
+
+controlA = EMMEANS(anova_bruceR, effect="B",by="A")
+
+controlB = EMMEANS(anova_bruceR, effect="A",by="B")
+```
+
+# 两因素混合设计
+
+## 数据录入
+
+根据舒华《心理与教育研究中的多因素实验设计(第2版)》p.73/74表格，逐列录入数据如下
+
+【注意】完全随机设计和重复测量设计都是5,7,5,2，而p.73这里是5,6,5,2，**有一个印刷错误**
+
+```{r}
+
+tbl = data.frame(value=c(3,6,4,3,4,6,4,2,5,7,5,2,4,5,3,3,8,9,8,7,12,13,12,11));
+A = c(rep(1,12),rep(2,12));
+B = c(rep(1,4),rep(2,4),rep(3,4),rep(1,4),rep(2,4),rep(3,4));
+
+tbl$A = factor(A);
+tbl$B = factor(B);
+tbl$S = factor(c(rep(c(1,2,3,4),3),rep(c(5,6,7,8),3)));
+tbl$group = factor((A-1)*3+B)
+
+subjects = split(tbl$value,tbl$S);
+frame = data.frame(subjects);
+frame = transpose(frame)
+# 注意，混合设计在wide-format中，被试内的重复测量和被试间因素都需要占用列
+frame[4] = c(1,1,1,1,2,2,2,2);
+colnames(frame) = c("B1","B2","B3","A")
+```
+
+## 数据检验
+
+### 正态性检验
+
+【注意】在两因素混合设计中，要求将**采用相同处理措施**的测量结果分为一组，然后对每一组分别进行正态性检验
+
+```{r}
+
+groups = split(tbl$value, tbl$group)
+lapply(groups, shapiro.test)
+
+qqPlot(tbl$value,tbl$group,distribution="norm",envelope=list(level=0.95))
+```
+
+### 方差齐性检验
+
+【注意】在两因素混合设计中，重复测量对应不同的被试内因素，而不同被试之间对应被试间因素。因此要求**在每一次重复测量时都进行一次同质性检验，比较不同被试组之间测量结果的方差齐性**。
+
+```{r}
+leveneTest(value~A,data=tbl[tbl$B==1,],center='mean')
+leveneTest(value~A,data=tbl[tbl$B==2,],center='mean')
+leveneTest(value~A,data=tbl[tbl$B==3,],center='mean')
+```
+
+### 球形检验
+
+【注意】**由于R语言自带的stats包中的球形度检验非常难用，建议直接用bruceR或ezANOVA**
+
+结果将在方差分析的部分展示
+
+## 方差分析
+
+### 主效应
+
+【方法1】使用aov函数
+
+【注意】本例中，被试内因素为B，因此需要在模型中声明误差项Error(S/B)
+
+```{r}
+
+anova_stats = aov(value ~ A*B+Error(S/B),data=tbl);
+summary(anova_stats)
+
+```
+
+-   但是注意，本例中没有通过球形度检验。而stats包中的aov函数不会进行校正，因此需要改用其它方法
+
+【方法2】使用bruceR工具包中的MANOVA函数
+
+【注意】由于违反球形假设，所以需要为其指定sph.correction；在得到的anova表中，B和A\*B的df1和df2是非整数，因此得到的F值和P值应该是校正过的
+
+```{r}
+
+anova_bruceR = MANOVA(frame,dvs="B1:B3",dvs.pattern="B(.)",within="B",between="A",sph.correction="GG")
+
+```
+
+【方法3】使用ez工具包中的ezANOVA函数
+
+```{r}
+
+ezANOVA(tbl,dv=.(value),between=.(A),within=.(B),wid=.(S))
+
+```
+
+【方法4】使用afex工具包中的aov_ez函数
+
+```{r}
+
+anova_afex = aov_ez(id="S",dv="value",within="B",between="A",data=tbl)
+summary(anova_afex)
+```
+
+### 交互效应
+
+交互效应，在A不等于1或B不等于1时显著
+
+```{r}
+
+with(tbl,interaction.plot(A,B,value))
+with(tbl,interaction.plot(B,A,value))
+```
+
+### 简单效应
+
+【注意】在分析双因素被试间设计的简单效应时：对于A因素（被试间），应该根据B的水平选择数据子集进行**单因素方差分析**；对于B因素（被试内），因该根据A的水平选择数据子集进行**单因素重复测量方差分析**。具体的计算过程可见matlab版代码。
+
+【注意2】两因素完全随机的简单效应也使用单因素方差分析，但是**所得到的MS仅用于F统计量的分子**，分母用的是两因素方差分析中得到的误差；两因素被试间的被试间因素同样使用单因素方差分析，但是**F统计量的分子和分母都取自单因素方差分析的结果**
+
+【方法1】aov；同样，**输出的结果是错误的！**
+
+```{r}
+
+controlA = emmeans(anova_stats,~B|A);
+controlB = emmeans(anova_stats,~A|B);
+
+test(contrast(controlA), joint=TRUE)
+print("=========================================")
+test(contrast(controlB), joint=TRUE)
+```
+
+对afex的结果计算，同之前一样，结果是正确的
+
+```{r}
+
+controlA = emmeans(anova_afex,~B|A);
+controlB = emmeans(anova_afex,~A|B);
+
+test(contrast(controlA), joint=TRUE)
+print("=========================================")
+test(contrast(controlB), joint=TRUE)
+```
+
+【方法2】bruceR
+
+```{r}
+
+controlA = EMMEANS(anova_bruceR, effect="B",by="A")
+
+controlB = EMMEANS(anova_bruceR, effect="A",by="B")
+```
+
+# 比较
+
+【R语言总结】
+
+-   R语言自带的aov函数很垃圾，不要用；用emmeans函数做简单效应分析也只有非重复测量的情况是正确的
+-   ez工具包的ezANOVA自带同质性检验、球形检验、自由度校正，但是目前为止没有从网上找到可以用来做简单效应分析的方法
+-   bruceR工具包同样自带同质性检验、球形检验、自由度校正，可以用MANOVA做方差分析，并且能用EMMEANS做简单效应分析
+-   afex工具包也自带同质性检验、球形检验、自由度校正
+-   总结：**推荐使用bruceR或者afex两个工具包**
+
+【平方和类型】
+
+-   SPSS默认使用Ⅲ型平方和，而R语言不管是stats的aov还是bruceR的MANOVA亦或者ez的ezANOVA，默认均使用Ⅰ型平方和
+
+【前提假设】
+
+-   两因素完全随机：正态性、方差齐性
+
+-   两因素被试内设计：正态性、球形（被试内因素）
+
+-   两因素被试间设计：正态性、方差齐性（被试间因素）、球形（被试内因素）
+
+【简单效应】
+
+-   两因素完全随机：F = 对子集做单因素完全随机方差分析的MS / **两因素中得到的残差MS**
+
+-   两因素被试内设计：F = 对子集做**单因素重复测量**方差分析的MS / **单因素重复测量**中得到的残差MS
+
+-   两因素被试间设计：
+
+    -   被试内因素：F = 对子集做单因素重复测量方差分析的MS / 单因素方差分析中得到的残差MS
+
+    -   被试间因素：F = 对子集做单因素完全随机方差分析的MS / **单因素中得到的残差MS**
